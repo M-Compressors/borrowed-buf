@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test (${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: ["1.89", stable, nightly]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+      - run: cargo test --no-default-features
+
+  no_std:
+    name: no_std (thumbv7em-none-eabihf)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.89"
+          targets: thumbv7em-none-eabihf
+      - run: cargo build --no-default-features --target thumbv7em-none-eabihf
+
+  miri:
+    name: miri (${{ matrix.model }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - model: stacked borrows
+            flags: -Zmiri-strict-provenance
+          - model: tree borrows
+            flags: -Zmiri-strict-provenance -Zmiri-tree-borrows
+    env:
+      MIRIFLAGS: ${{ matrix.flags }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri, rust-src
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo miri setup
+      - run: cargo miri test
+      - run: cargo miri test --no-default-features
+      # Big-endian 32-bit target catches layout and pointer-width assumptions.
+      - run: cargo miri test --target powerpc-unknown-linux-gnu
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets
+      - run: cargo clippy --all-targets --no-default-features
+      - run: cargo doc --no-deps
