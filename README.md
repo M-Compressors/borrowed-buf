@@ -1,5 +1,10 @@
 # borrowed-buf
 
+[![Crates.io](https://img.shields.io/crates/v/borrowed-buf.svg)](https://crates.io/crates/borrowed-buf)
+[![Docs.rs](https://img.shields.io/docsrs/borrowed-buf)](https://docs.rs/borrowed-buf)
+[![CI](https://github.com/M-Compressors/borrowed-buf/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/M-Compressors/borrowed-buf/actions/workflows/ci.yml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](https://blog.rust-lang.org/2025/08/07/Rust-1.89.0/)
+
 A small, fast, `no_std` port of the nightly-only
 [`core::io::BorrowedBuf`](https://doc.rust-lang.org/nightly/core/io/struct.BorrowedBuf.html)
 and [`BorrowedCursor`](https://doc.rust-lang.org/nightly/core/io/struct.BorrowedCursor.html),
