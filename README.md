@@ -1,22 +1,24 @@
 # borrowed-buf
 
-A small, fast, `no_std` alternative to the nightly-only
+A small, fast, `no_std` port of the nightly-only
 [`core::io::BorrowedBuf`](https://doc.rust-lang.org/nightly/core/io/struct.BorrowedBuf.html)
-and `BorrowedCursor`, usable on **stable Rust (MSRV 1.89)**.
+and [`BorrowedCursor`](https://doc.rust-lang.org/nightly/core/io/struct.BorrowedCursor.html),
+usable on **stable Rust (MSRV 1.89)**.
+
+The API mirrors `core::io` on nightly (including the `borrowed_buf_init` methods), so
+switching to the standard library later is a matter of changing the import.
 
 It lets you read into uninitialized memory without zeroing it first, while
-tracking how much of the buffer is filled and how much is initialized:
+tracking how much of the buffer is filled and whether the rest is initialized:
 
 ```text
-[             capacity              ]
-[ filled |         unfilled         ]
-[    initialized    | uninitialized ]
+[                capacity                ]
+[ filled | unfilled (may be initialized) ]
 ```
 
 - No dependencies, `#![no_std]`; the default `std` feature adds `std::io` helpers.
-- Generic over the element type: `BorrowedBuf<'a, T = u8>` for any `T: Copy`.
-- The initialized region only grows, so a reused buffer is zeroed at most once.
-- Safe accessors for the initialized and uninitialized halves of the unfilled region.
+- Generic over the element type: `BorrowedBuf<'a, T>` for any `T: Copy`.
+- `ensure_init` initializes the buffer at most once, so a reused buffer is zeroed only once.
 - Every test runs under Miri (Stacked Borrows and Tree Borrows) in CI.
 
 ## Why
@@ -33,16 +35,18 @@ which must already be initialized. That leaves two options:
 `BorrowedBuf` is a **safe wrapper around `&mut [MaybeUninit<T>]`** that does
 this bookkeeping for you:
 
-- `filled()` and `into_filled()` expose only initialized data, as plain
-  `&[T]` / `&mut [T]`, so your code never calls `assume_init`.
+- `filled()`, `into_filled()` and `into_filled_mut()` expose only initialized
+  data, as plain `&[T]` / `&mut [T]`, so your code never calls `assume_init`.
 - `append()` copies straight into uninitialized memory, with no zeroing.
-- `ensure_init()` initializes only what was never initialized, at most once per
-  buffer, and hands back a `&mut [T]` for APIs like `Read::read`.
+- `ensure_init()` initializes the unfilled part at most once per buffer, and
+  hands back a `&mut [T]` for APIs like `Read::read`.
 - A `BorrowedCursor` is append-only: a callee can't read, overwrite or
   de-initialize what the caller already filled.
+- `with_unfilled_buf()` hands a callee a fresh `BorrowedBuf` over the unfilled
+  part, so it can inspect what it wrote.
 - Writing in place is still possible through a few `unsafe` methods
-  (`as_mut`, `advance_unchecked`, `set_init`), each with one documented
-  precondition, so the unsafe surface is small and easy to audit.
+  (`as_mut`, `advance`, `set_init`), each with one documented precondition,
+  so the unsafe surface is small and easy to audit.
 
 ## Example
 
@@ -51,7 +55,7 @@ use borrowed_buf::BorrowedBuf;
 use core::mem::MaybeUninit;
 
 let mut storage = [MaybeUninit::<u8>::uninit(); 16];
-let mut buf = BorrowedBuf::new(&mut storage);
+let mut buf: BorrowedBuf<'_, u8> = BorrowedBuf::from(&mut storage[..]);
 
 // Hand out a cursor: the callee can only append, never touch what's already filled.
 let mut cursor = buf.unfilled();
@@ -61,11 +65,11 @@ cursor.append(b"hello");
 // SAFETY: only initialized bytes are written, and the first one is written before advancing.
 unsafe {
     cursor.as_mut()[0].write(b'!');
-    cursor.advance_unchecked(1);
+    cursor.advance(1);
 }
 
 assert_eq!(buf.filled(), b"hello!");
-assert_eq!(buf.init_len(), 6);
+assert!(!buf.is_init());
 ```
 
 Any `Copy` element type works, e.g. decoding samples straight into uninitialized memory:
@@ -74,19 +78,19 @@ Any `Copy` element type works, e.g. decoding samples straight into uninitialized
 use borrowed_buf::{BorrowedBuf, BorrowedCursor};
 use core::mem::MaybeUninit;
 
-fn decode(input: &[u8], mut out: BorrowedCursor<'_, '_, i16>) {
+fn decode(input: &[u8], mut out: BorrowedCursor<'_, i16>) {
     let n = out.capacity().min(input.len() / 2);
     // SAFETY: only initialized values are written.
     let slots = unsafe { out.as_mut() };
     for (slot, pair) in slots.iter_mut().zip(input.chunks_exact(2)).take(n) {
         slot.write(i16::from_le_bytes([pair[0], pair[1]]));
     }
-    // SAFETY: the first `n` unfilled elements were just written.
-    unsafe { out.advance_unchecked(n) };
+    // SAFETY: the first `n` elements of the cursor were just written.
+    unsafe { out.advance(n) };
 }
 
 let mut storage = [MaybeUninit::<i16>::uninit(); 4];
-let mut samples = BorrowedBuf::new(&mut storage);
+let mut samples = BorrowedBuf::<i16>::from(&mut storage[..]);
 decode(&[1, 0, 0xff, 0xff], samples.unfilled());
 assert_eq!(samples.filled(), &[1, -1]);
 ```
@@ -100,23 +104,27 @@ use core::mem::MaybeUninit;
 
 let mut reader: &[u8] = b"some bytes";
 let mut storage = [MaybeUninit::<u8>::uninit(); 4];
-let mut buf = BorrowedBuf::new(&mut storage);
+let mut buf = BorrowedBuf::<u8>::from(&mut storage[..]);
 
 io::read_buf_exact(&mut reader, buf.unfilled()).unwrap();
 assert_eq!(buf.filled(), b"some");
 # }
 ```
 
-## Differences from `core::io::BorrowedBuf`
+Note that `BorrowedBuf::from(&mut [MaybeUninit<T>])` can't always infer `T`, since
+`MaybeUninit<T>` is itself `Copy` and `From<&mut [T]>` would also apply. Name the element type
+(`BorrowedBuf::<u8>::from(..)`) when the compiler asks for it; `core::io` behaves the same.
 
-| `core::io` (nightly)              | `borrowed-buf`                                   |
+## Differences from `core::io`
+
+The `BorrowedBuf` and `BorrowedCursor` APIs are the same as on nightly. The only additions live
+in the `io` module, because `std::io::Read` can't be extended with new methods on stable:
+
+| `core::io` / `std::io` (nightly)  | `borrowed-buf`                                   |
 |-----------------------------------|--------------------------------------------------|
-| `BorrowedBuf<'a>` (bytes only)    | `BorrowedBuf<'a, T = u8>` (any `T: Copy`)        |
-| `BorrowedCursor<'a>`              | `BorrowedCursor<'buf, 'data, T = u8>`            |
-| `cursor.ensure_init() -> &mut Self` | `cursor.ensure_init() -> &mut [T]` (`T::default()`) |
-| `cursor.init_mut()`               | `cursor.init_mut()` + safe `cursor.uninit_mut()` |
 | `Read::read_buf(cursor)`          | `io::read_buf(&mut reader, cursor)`              |
 | `Read::read_buf_exact(cursor)`    | `io::read_buf_exact(&mut reader, cursor)`        |
+| `impl Write for BorrowedCursor<'_, u8>` | `impl Write for BorrowedCursor<'_, u8>`    |
 
 ## License
 
