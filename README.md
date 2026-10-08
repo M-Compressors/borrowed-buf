@@ -11,7 +11,8 @@ and [`BorrowedCursor`](https://doc.rust-lang.org/nightly/core/io/struct.Borrowed
 usable on **stable Rust (MSRV 1.89)**.
 
 The API mirrors `core::io` on nightly (including the `borrowed_buf_init` methods), so
-switching to the standard library later is a matter of changing the import.
+switching to the standard library later is a matter of changing the import, unless you use
+one of the few [additions](#differences-from-coreio).
 
 It lets you read into uninitialized memory without zeroing it first, while
 tracking how much of the buffer is filled and whether the rest is initialized:
@@ -42,7 +43,8 @@ this bookkeeping for you:
 
 - `filled()`, `into_filled()` and `into_filled_mut()` expose only initialized
   data, as plain `&[T]` / `&mut [T]`, so your code never calls `assume_init`.
-- `append()` copies straight into uninitialized memory, with no zeroing.
+- `append()` copies straight into uninitialized memory, with no zeroing;
+  `append_fill()` does the same for `n` copies of one value.
 - `ensure_init()` initializes the unfilled part at most once per buffer, and
   hands back a `&mut [T]` for APIs like `Read::read`.
 - A `BorrowedCursor` is append-only: a callee can't read, overwrite or
@@ -122,8 +124,16 @@ Note that `BorrowedBuf::from(&mut [MaybeUninit<T>])` can't always infer `T`, sin
 
 ## Differences from `core::io`
 
-The `BorrowedBuf` and `BorrowedCursor` APIs are the same as on nightly. The only additions live
-in the `io` module, because `std::io::Read` can't be extended with new methods on stable:
+The `BorrowedBuf` and `BorrowedCursor` APIs are a superset of nightly's. Two methods are
+additions, so code that uses them won't switch to `core::io` by changing the import alone:
+
+- `BorrowedCursor::append_fill(n, value)` appends `n` copies of `value`, like `append` but
+  without needing a source slice (e.g. for run-length or LZ77 distance-1 runs).
+- `BorrowedBuf::truncate(len)` shortens the filled region, like `Vec::truncate`; the elements
+  cut off stay initialized.
+
+The rest of the additions live in the `io` module, because `std::io::Read` can't be extended
+with new methods on stable:
 
 | `core::io` / `std::io` (nightly)  | `borrowed-buf`                                   |
 |-----------------------------------|--------------------------------------------------|

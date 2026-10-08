@@ -124,3 +124,30 @@ fn generic_append_overflow_panics() {
     let mut buf = BorrowedBuf::<u64>::from(&mut storage[..]);
     buf.unfilled().append(&[1, 2]);
 }
+
+#[test]
+fn append_fill_struct_elements() {
+    let px = Pixel {
+        r: 1,
+        g: 2,
+        b: 3,
+        a: 0.5,
+    };
+    let mut storage = [MaybeUninit::<Pixel>::uninit(); 4];
+    let mut buf = BorrowedBuf::<Pixel>::from(&mut storage[..]);
+    buf.unfilled().append_fill(3, px);
+    assert_eq!(buf.filled(), &[px; 3]);
+    buf.truncate(1);
+    buf.unfilled().append_fill(1, Pixel::default());
+    assert_eq!(buf.into_filled(), &[px, Pixel::default()]);
+}
+
+#[test]
+fn append_fill_zero_sized_elements() {
+    let mut storage = [MaybeUninit::<()>::uninit(); 5];
+    let mut buf = BorrowedBuf::<()>::from(&mut storage[..]);
+    buf.unfilled().append_fill(5, ());
+    assert_eq!(buf.len(), 5);
+    buf.truncate(2);
+    assert_eq!(buf.unfilled().capacity(), 3);
+}

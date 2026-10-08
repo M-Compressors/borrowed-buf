@@ -738,3 +738,91 @@ fn random_ops<T: Copy + Default + PartialEq + Debug>(elem: impl Fn(u8) -> T) {
 fn seq<T>(n: usize, elem: &impl Fn(u8) -> T) -> Vec<T> {
     (0..n as u8).map(elem).collect()
 }
+
+#[test]
+fn append_fill_writes_n_copies_without_initializing_the_rest() {
+    let mut storage = uninit::<8>();
+    let mut buf = BorrowedBuf::<u8>::from(&mut storage[..]);
+    let mut cursor = buf.unfilled();
+    cursor.append(b"ab");
+    cursor.append_fill(3, 0);
+    assert_eq!(cursor.written(), 5);
+    assert_eq!(cursor.capacity(), 3);
+    assert!(!cursor.is_init());
+    cursor.append_fill(0, b'?');
+    cursor.append(b"c");
+    assert_eq!(buf.filled(), b"ab\0\0\0c");
+    assert!(!buf.is_init());
+}
+
+#[test]
+fn append_fill_up_to_capacity() {
+    let mut storage = uninit::<4>();
+    let mut buf = BorrowedBuf::<u8>::from(&mut storage[..]);
+    buf.unfilled().append_fill(4, b'z');
+    assert_eq!(buf.filled(), b"zzzz");
+}
+
+#[test]
+fn append_fill_keeps_init_buffer_init() {
+    let mut storage = *b"......";
+    let mut buf = BorrowedBuf::<u8>::from(&mut storage[..]);
+    let mut cursor = buf.unfilled();
+    cursor.append_fill(2, b'x');
+    assert!(cursor.is_init());
+    cursor.advance_checked(4);
+    assert_eq!(buf.filled(), b"xx....");
+}
+
+#[test]
+#[should_panic = "appended past the end"]
+fn append_fill_overflow_panics() {
+    let mut storage = uninit::<4>();
+    let mut buf = BorrowedBuf::<u8>::from(&mut storage[..]);
+    let mut cursor = buf.unfilled();
+    cursor.append(b"ab");
+    cursor.append_fill(3, 0);
+}
+
+#[test]
+fn truncate_shortens_filled_only() {
+    let mut storage = uninit::<6>();
+    let mut buf = BorrowedBuf::<u8>::from(&mut storage[..]);
+    buf.unfilled().append(b"abcd");
+    // Truncating to the current length or beyond is a no-op.
+    assert_eq!(buf.truncate(4).len(), 4);
+    assert_eq!(buf.truncate(10).len(), 4);
+    assert_eq!(buf.truncate(1).filled(), b"a");
+    assert!(!buf.is_init());
+    assert_eq!(buf.unfilled().capacity(), 5);
+    buf.unfilled().append(b"BCDEF");
+    assert_eq!(buf.filled(), b"aBCDEF");
+    assert_eq!(buf.truncate(0).len(), 0);
+}
+
+#[test]
+fn truncate_keeps_init_buffer_init() {
+    let mut storage = uninit::<4>();
+    let mut buf = BorrowedBuf::<u8>::from(&mut storage[..]);
+    buf.unfilled().append(b"ab");
+    buf.unfilled().ensure_init();
+    buf.truncate(1);
+    assert!(buf.is_init());
+    // The cut-off element is visible again through the initialized cursor.
+    assert_eq!(buf.unfilled().ensure_init(), b"b\0\0");
+}
+
+#[test]
+fn truncate_inside_with_unfilled_buf() {
+    let mut storage = uninit::<8>();
+    let mut buf = BorrowedBuf::<u8>::from(&mut storage[..]);
+    let mut cursor = buf.unfilled();
+    cursor.append(b"ab");
+    cursor.with_unfilled_buf(|sub| {
+        sub.unfilled().append(b"cdef");
+        // Only the sub-buffer's own filled part can be truncated.
+        sub.truncate(1);
+    });
+    assert_eq!(cursor.written(), 3);
+    assert_eq!(buf.filled(), b"abc");
+}

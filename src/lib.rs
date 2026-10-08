@@ -215,6 +215,34 @@ impl<'data, T: Copy> BorrowedBuf<'data, T> {
         self
     }
 
+    /// Shortens the filled region to `len` elements.
+    ///
+    /// If `len` is greater than or equal to [`len`](Self::len), this has no effect. The contents
+    /// of the buffer are not modified, and the elements cut off stay initialized, so
+    /// [`is_init`](Self::is_init) is unchanged.
+    ///
+    /// This is not part of `core::io::BorrowedBuf`.
+    ///
+    /// ```
+    /// use borrowed_buf::BorrowedBuf;
+    /// use core::mem::MaybeUninit;
+    ///
+    /// let mut storage = [MaybeUninit::uninit(); 8];
+    /// let mut buf = BorrowedBuf::<u8>::from(&mut storage[..]);
+    /// buf.unfilled().append(b"abcdef");
+    /// buf.truncate(2);
+    /// assert_eq!(buf.filled(), b"ab");
+    /// buf.unfilled().append(b"!");
+    /// assert_eq!(buf.filled(), b"ab!");
+    /// ```
+    #[inline]
+    pub fn truncate(&mut self, len: usize) -> &mut Self {
+        if len < self.filled {
+            self.filled = len;
+        }
+        self
+    }
+
     /// Asserts that the unfilled part of the buffer is initialized.
     ///
     /// # Safety
@@ -534,6 +562,41 @@ impl<'a, T: Copy> BorrowedCursor<'a, T> {
 
         // SAFETY: these elements have just been initialized.
         unsafe { self.advance(buf.len()) };
+    }
+
+    /// Appends `n` copies of `value` to the cursor, advancing position within its buffer.
+    ///
+    /// Like [`append`](Self::append), this writes each element once and leaves the rest of the
+    /// cursor untouched. It does not need a source slice of `n` elements.
+    ///
+    /// This is not part of `core::io::BorrowedCursor`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `self.capacity()` is less than `n`.
+    ///
+    /// ```
+    /// use borrowed_buf::BorrowedBuf;
+    /// use core::mem::MaybeUninit;
+    ///
+    /// let mut storage = [MaybeUninit::uninit(); 8];
+    /// let mut buf = BorrowedBuf::<u8>::from(&mut storage[..]);
+    /// let mut cursor = buf.unfilled();
+    /// cursor.append(b"ab");
+    /// cursor.append_fill(3, b'-');
+    /// assert_eq!(buf.filled(), b"ab---");
+    /// assert!(!buf.is_init());
+    /// ```
+    #[inline]
+    #[track_caller]
+    pub fn append_fill(&mut self, n: usize, value: T) {
+        assert!(self.capacity() >= n, "appended past the end of the buffer");
+
+        // Writing initialized values never de-initializes an element.
+        self.unfilled_slice()[..n].fill(MaybeUninit::new(value));
+
+        // SAFETY: these elements have just been initialized.
+        unsafe { self.advance(n) };
     }
 
     /// Runs the given closure with a `BorrowedBuf` containing the unfilled part
