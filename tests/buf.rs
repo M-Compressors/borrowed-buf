@@ -35,6 +35,15 @@ fn from_init_slice_is_fully_initialized() {
 }
 
 #[test]
+fn from_uninit_slice_is_uninitialized() {
+    let mut storage = uninit::<3>();
+    let mut buf = BorrowedBuf::from(&mut storage[..]);
+    assert_eq!((buf.capacity(), buf.init_len()), (3, 0));
+    buf.unfilled().append(b"a");
+    assert_eq!(buf.filled(), b"a");
+}
+
+#[test]
 fn zero_capacity() {
     let mut buf = BorrowedBuf::<u8>::new(&mut []);
     let mut cursor = buf.unfilled();
